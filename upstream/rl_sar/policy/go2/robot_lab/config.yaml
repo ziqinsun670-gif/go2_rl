@@ -55,6 +55,8 @@ go2/robot_lab:
   real_getup_attitude_passive_pitch_deg: 30.0
   real_hard_roll_deg: 60.0
   real_hard_pitch_deg: 60.0
+  real_stand_hold_kp: 20.0
+  real_stand_hold_kd: 0.5
   real_telemetry_log_decimation: 4
   torque_limits: [23.5, 23.5, 23.5,
                   23.5, 23.5, 23.5,

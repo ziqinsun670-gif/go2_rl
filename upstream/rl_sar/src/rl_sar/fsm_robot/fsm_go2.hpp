@@ -128,6 +128,7 @@ public:
                  rl.control.current_gamepad == Input::Gamepad::B) {
         return "RLFSMStateGetDown";
       }
+      return "RLFSMStateStandHold";
     }
     return state_name_;
   }
@@ -180,6 +181,58 @@ private:
       fsm_command->motor_command.kd[i] = 8;
       fsm_command->motor_command.tau[i] = 0;
     }
+  }
+};
+
+class RLFSMStateStandHold : public RLFSMState {
+public:
+  RLFSMStateStandHold(RL *rl) : RLFSMState(*rl, "RLFSMStateStandHold") {}
+
+  void Enter() override {
+    std::cout << LOGGER::NOTE
+              << "Entered stand-hold mode. Holding default stance with low "
+                 "gains. Press '1' to enter RL, 'P' for Passive."
+              << std::endl;
+  }
+
+  void Run() override {
+    const auto default_pos =
+        rl.params.Get<std::vector<float>>("default_dof_pos");
+    const float hold_kp = rl.params.Get<float>("real_stand_hold_kp", 20.0f);
+    const float hold_kd = rl.params.Get<float>("real_stand_hold_kd", 0.5f);
+    const int num = rl.params.Get<int>("num_of_dofs");
+
+    for (int i = 0; i < num; ++i) {
+      if (i < static_cast<int>(default_pos.size())) {
+        fsm_command->motor_command.q[i] = default_pos[i];
+      } else if (fsm_state != nullptr &&
+                 i < static_cast<int>(fsm_state->motor_state.q.size())) {
+        fsm_command->motor_command.q[i] = fsm_state->motor_state.q[i];
+      }
+      fsm_command->motor_command.dq[i] = 0;
+      fsm_command->motor_command.kp[i] = hold_kp;
+      fsm_command->motor_command.kd[i] = hold_kd;
+      fsm_command->motor_command.tau[i] = 0;
+    }
+  }
+
+  void Exit() override {}
+
+  std::string CheckChange() override {
+    if (rl.control.current_keyboard == Input::Keyboard::P ||
+        rl.control.current_gamepad == Input::Gamepad::LB_X) {
+      return "RLFSMStatePassive";
+    } else if (rl.control.current_keyboard == Input::Keyboard::Num1 ||
+               rl.control.current_gamepad == Input::Gamepad::RB_DPadUp) {
+      return "RLFSMStateRLLocomotion";
+    } else if (rl.control.current_keyboard == Input::Keyboard::Num9 ||
+               rl.control.current_gamepad == Input::Gamepad::B) {
+      return "RLFSMStateGetDown";
+    } else if (rl.control.current_keyboard == Input::Keyboard::Num0 ||
+               rl.control.current_gamepad == Input::Gamepad::A) {
+      return "RLFSMStateGetUp";
+    }
+    return state_name_;
   }
 };
 
@@ -294,6 +347,8 @@ public:
       return std::make_shared<go2_fsm::RLFSMStatePassive>(rl);
     else if (state_name == "RLFSMStateGetUp")
       return std::make_shared<go2_fsm::RLFSMStateGetUp>(rl);
+    else if (state_name == "RLFSMStateStandHold")
+      return std::make_shared<go2_fsm::RLFSMStateStandHold>(rl);
     else if (state_name == "RLFSMStateGetDown")
       return std::make_shared<go2_fsm::RLFSMStateGetDown>(rl);
     else if (state_name == "RLFSMStateRLLocomotion")
@@ -302,8 +357,8 @@ public:
   }
   std::string GetType() const override { return "go2"; }
   std::vector<std::string> GetSupportedStates() const override {
-    return {"RLFSMStatePassive", "RLFSMStateGetUp", "RLFSMStateGetDown",
-            "RLFSMStateRLLocomotion"};
+    return {"RLFSMStatePassive", "RLFSMStateGetUp", "RLFSMStateStandHold",
+            "RLFSMStateGetDown", "RLFSMStateRLLocomotion"};
   }
   std::string GetInitialState() const override { return initial_state_; }
 

@@ -1,42 +1,77 @@
-# GO2 实机前置检查记录
+# GO2 实机前置检查与测试流程
 
-本文记录本项目在 Unitree GO2 上进入电机控制测试前必须完成的检查项。
-当前阶段只允许执行网络检查、`rt/lowstate` 订阅和影子推理；这些测试不创建
-`rt/lowcmd` 发布器，不发送电机命令，不释放原厂运动服务。
+本文是 Unitree GO2 实机测试的现场手册。目标是把测试分成清晰等级：
+只读状态检查、只读影子推理、吊装低层控制、吊装 RL、最后才是地面低速测试。
 
-## 当前结论
+## 测试等级
 
-- 网络链路已通过：PC `enp99s0` 为 `192.168.123.222/24`，GO2 为
-  `192.168.123.161`，ping 0% 丢包，典型 RTT 约 0.3 ms。
-- 30 秒只读影子推理已通过：`rt/lowstate` 约 500 Hz，策略 50 Hz，
-  CRC 错误 0，状态陈旧帧 0，ONNX CPU 推理 p95 小于 0.2 ms。
-- 关节顺序使用 `FR, FL, RR, RL`，每条腿内部为 `hip, thigh, calf`。
-- FR、FL、RR 的只读触碰日志已留档并核对通过。
-- 若 RL 已现场确认但未生成 `logs/touch_RL_*.log`，建议补录一次作为留档。
-- 尚未进行低层电机控制测试；不得直接在地面执行 RL 行走或“前进 0.5 m”。
+### A. 只读测试
 
-## 安全边界
+允许机器人在地面保持原厂站立状态时进行。
 
-只读测试允许机器人在地面保持原厂站立状态时进行，因为程序只订阅状态：
+只读测试包括：
+
+- 网络检查。
+- `rt/lowstate` 订阅。
+- ONNX shadow inference。
+- 轻微触碰腿部验证关节顺序。
+
+只读测试必须满足：
 
 ```text
-mode=READ_ONLY_SHADOW publisher_created=false control_commands_sent=0
+publisher_created=false
+control_commands_sent=0
 ```
 
-任何会发送 `rt/lowcmd` 的程序都不属于只读测试，包括
-`upstream/rl_sar/cmake_build/bin/rl_real_go2`。进入这些测试前必须满足：
+### B. 低层控制测试
 
-- 机器人吊装，四足离地。
-- 遥控急停已验证有效，现场有物理断电人员。
+`rl_real_go2` 会释放原厂运动服务、创建 `rt/lowcmd` 发布器并发送电机命令。
+该测试必须吊装，四足完全离地。
+
+必须具备：
+
+- 遥控急停已验证。
+- 现场人员能物理断电。
 - 不依赖拔网线作为急停。
-- 低层控制程序已有状态新鲜度 watchdog，超时能锁存 Passive。
-- 关节目标已有 slew-rate 限幅。
-- 速度命令已有缓启动和缓停止。
-- 已先完成 Passive、单关节顺序/方向、缓慢站姿、零速 RL 的吊装验证。
+- 操作员能随时按 `P` 进入 Passive。
+- 明确知道 Passive 是卸力，不是站姿保持。
 
-## 固定关节顺序
+### C. 地面测试
 
-部署和影子推理使用 GO2 SDK 电机数组 0 至 11 号顺序：
+只有在吊装低层控制和吊装 RL 均合格后才允许进入地面测试。当前策略没有
+“前进 0.5 m”的距离闭环；如果需要固定距离动作，必须额外实现 supervisor。
+
+## 固定网络配置
+
+默认参数：
+
+```text
+PC 网口: enp99s0
+PC IP:   192.168.123.222/24
+GO2 IP:  192.168.123.161
+```
+
+检查命令：
+
+```bash
+cd /home/hyq/unitree_go2/go2_rl
+mkdir -p logs
+
+./tools/check_connection.sh enp99s0 192.168.123.161
+```
+
+合格条件：
+
+```text
+网口 UP / LOWER_UP
+PC 有 192.168.123.x/24 地址
+ping 192.168.123.161 成功
+0% packet loss
+```
+
+## 关节顺序
+
+部署、影子推理和 CSV 日志统一使用 GO2 SDK 电机数组 0 至 11：
 
 ```text
 0  FR_hip
@@ -53,20 +88,25 @@ mode=READ_ONLY_SHADOW publisher_created=false control_commands_sent=0
 11 RL_calf
 ```
 
-策略动作到关节目标的换算：
+正常默认站姿：
 
 ```text
-hip   q_des = 0.0  + action * 0.125
-thigh q_des = 0.8  + action * 0.25
-calf  q_des = -1.5 + action * 0.25
+hip   ≈  0.0 rad
+thigh ≈ +0.8 rad
+calf  ≈ -1.5 rad
 ```
 
-正常站姿下，`hip` 应接近 0，`thigh` 应接近 `+0.8`，`calf` 应接近
-`-1.5`。如果日志明显不满足这个形态，不能继续实机动作测试。
+策略动作换算：
+
+```text
+hip   q_target = 0.0  + action * 0.125
+thigh q_target = 0.8  + action * 0.25
+calf  q_target = -1.5 + action * 0.25
+```
 
 ## 正负方向判断
 
-以下规则用于只读扰动或吊装小幅单关节命令时核对方向：
+只读触碰或吊装小幅单关节命令时按以下规则核对：
 
 ```text
 hip q 增大：
@@ -83,41 +123,54 @@ calf q 减小：
   膝盖更折叠，数值从 -1.5 往 -1.8、-2.0 方向走
 ```
 
-只读触碰验证时不要大幅掰腿。动作过大时机身和其他腿会耦合，影子策略输出也
-会被带到限位附近。
+如果顺序或正负方向有任何疑问，停止进入低层控制测试。
 
-## 只读检查命令
+## 只读 shadow inference
 
-从项目目录执行：
+零速度 30 秒：
 
 ```bash
 cd /home/hyq/unitree_go2/go2_rl
 mkdir -p logs
-```
 
-检查网络：
-
-```bash
-./tools/check_connection.sh enp99s0 192.168.123.161
-```
-
-30 秒只读状态和影子推理稳定性：
-
-```bash
 ./tools/verify_robot_readonly.sh enp99s0 30 0 0 0 \
   | tee "logs/readonly_zero_$(date +%Y%m%d_%H%M%S).log"
 ```
 
-影子速度命令测试，仍然不发送给机器人：
+影子速度命令 `vx=0.2`，仍不发送给机器人：
 
 ```bash
 ./tools/verify_robot_readonly.sh enp99s0 30 0.2 0 0 \
   | tee "logs/readonly_vx02_$(date +%Y%m%d_%H%M%S).log"
 ```
 
-四条腿触碰确认：
+合格条件：
+
+```text
+result=PASS
+lowstate_hz 接近 500 Hz
+policy_frames 符合 duration * 50 Hz
+stale_policy_frames=0
+crc_errors=0
+invalid_state_frames=0
+publisher_created=false
+control_commands_sent=0
+```
+
+推理耗时参考：
+
+```text
+inference_mean_ms / p95 / max 应明显小于 20 ms 策略周期
+```
+
+## 只读触碰验证
+
+每次只轻微扰动指定腿。不要大幅掰腿；机身耦合会影响其他腿和影子策略输出。
 
 ```bash
+cd /home/hyq/unitree_go2/go2_rl
+mkdir -p logs
+
 ./tools/verify_robot_readonly.sh enp99s0 5 0 0 0 \
   | tee "logs/touch_FR_$(date +%Y%m%d_%H%M%S).log"
 
@@ -131,28 +184,10 @@ mkdir -p logs
   | tee "logs/touch_RL_$(date +%Y%m%d_%H%M%S).log"
 ```
 
-运行每条腿触碰命令时，只轻微扰动对应那条腿。结束后看 `joint_position_range`
-和 `joint_velocity_range` 中哪条腿变化最大。
-
-## 日志判读
-
 查看最新日志：
 
 ```bash
-tail -n 40 "$(ls -t logs/*.log | head -n 1)"
-```
-
-把最新日志按关节映射成表：
-
-```bash
-awk 'function load(prefix,arr,line,vals,n,i){sub(prefix,"",line); n=split(line,vals," "); for(i=1;i<=n;i++) arr[i]=vals[i]}
-  /^joint_position_rad=/{line=$0; load("joint_position_rad=",q,line)}
-  /^shadow_joint_targets_rad=/{line=$0; load("shadow_joint_targets_rad=",t,line)}
-  END{
-    split("FR_hip FR_thigh FR_calf FL_hip FL_thigh FL_calf RR_hip RR_thigh RR_calf RL_hip RL_thigh RL_calf",n," ");
-    print "idx name q_now target delta";
-    for(i=1;i<=12;i++) printf "%02d  %-9s %+8.4f %+8.4f %+8.4f\n", i-1,n[i],q[i],t[i],t[i]-q[i]
-  }' "$(ls -t logs/*.log | head -n 1)"
+tail -n 40 "$(ls -t logs/touch_*.log | head -n 1)"
 ```
 
 按腿合计 position、velocity、torque 变化：
@@ -176,141 +211,141 @@ for my $metric (qw(pos vel tau)) {
     printf "%s %s sum=%.6f max_joint=%.6f\n", $metric, $leg, $sum{$metric}{$leg}+0, $max{$metric}{$leg}+0;
   }
 }
-}' "$(ls -t logs/*.log | head -n 1)"
+}' "$(ls -t logs/touch_*.log | head -n 1)"
 ```
 
-判定标准：
+合格条件：
 
+- 触碰哪条腿，哪条腿的 position/velocity 合计变化最大。
 - `result=PASS`。
-- `lowstate_hz` 接近 500 Hz。
 - `crc_errors=0`。
 - `stale_policy_frames=0`。
-- `publisher_created=false control_commands_sent=0`。
-- 触碰哪条腿，那条腿的 position/velocity 合计变化应最大。
-- `clamped_targets` 最好为 0；若非 0，说明扰动过大或策略目标碰限位，不能作为动作测试放行依据。
+- `clamped_targets=0` 最好；若不为 0，说明扰动过大或策略目标碰限位，该次只作参考。
 
-## 已留档结果
+## 构建低层实机程序
 
-30 秒 `vx=0.2` 只读影子推理：
-
-```text
-log: logs/readonly_vx02_20260815_155221.log
-result=PASS
-policy_frames=1500
-lowstate_messages=14993
-lowstate_hz=499.763991
-stale_policy_frames=0
-crc_errors=0
-invalid_state_frames=0
-inference_mean_ms=0.061309
-inference_p95_ms=0.104741
-inference_max_ms=0.236371
-clamped_targets=0
-control_commands_sent=0
+```bash
+cd /home/hyq/unitree_go2/go2_rl
+./tools/build_go2_deploy.sh
 ```
 
-FR 触碰确认：
+输出：
 
 ```text
-log: logs/touch_FR_20260815_161520.log
-position_sum: FR 0.193648, FL 0.139104, RR 0.114282, RL 0.080527
-velocity_sum: FR 2.247130, FL 1.335033, RR 1.105704, RL 0.883451
-torque_sum:   FR 7.446223, FL 6.163957, RR 6.438138, RL 6.805090
-结论：FR 主变化最大，FR 映射正确。扰动偏大，clamped_targets=2。
+upstream/rl_sar/cmake_build/bin/rl_real_go2
 ```
-
-FL 触碰确认：
-
-```text
-log: logs/touch_FL_20260815_162002.log
-position_sum: FL 0.519951, FR 0.067338, RR 0.077102, RL 0.082491
-velocity_sum: FL 2.930738, FR 0.986068, RR 0.908388, RL 0.992301
-torque_sum:   FL 14.494573, FR 5.667126, RR 6.322691, RL 7.477146
-结论：FL 主变化最大，FL 映射正确。
-```
-
-RR 触碰确认：
-
-```text
-log: logs/touch_RR_20260815_162144.log
-position_sum: RR 0.340883, FR 0.053460, FL 0.081614, RL 0.080266
-velocity_sum: RR 4.536890, FR 0.926418, FL 1.062399, RL 0.982696
-torque_sum:   RR 15.360411, FR 6.650475, FL 6.576260, RL 8.747043
-结论：RR 主变化最大，RR 映射正确。扰动偏大，clamped_targets=1。
-```
-
-## 进入下一阶段前
-
-下一阶段不是地面行走，而是吊装低层测试。推荐顺序：
-
-1. 吊装并确认四足完全离地。
-2. 保留原厂控制，确认遥控急停和物理断电。
-3. 运行低层 Passive，确认能安全退出。
-4. 极小幅单关节命令，逐个确认 12 个关节顺序和正负方向。
-5. 缓慢插值到默认站姿 `0.0, 0.8, -1.5`。
-6. 零速度 RL 悬空测试，只观察输出连续性和扭矩。
-7. 通过后才考虑地面低速速度跟踪；若要“前进 0.5 m”，还必须先加入距离
-   supervisor，因为当前策略只接收速度命令，不接收目标距离。
 
 ## 低层实机按键
 
-`rl_real_go2` 会释放原厂运动服务、创建 `rt/lowcmd` 发布器并发送低层命令。
-只允许在吊装、急停和物理断电都准备好的情况下运行。
-
 ```text
-P       强制 Passive，发现异常立刻按
-0       12 个关节插值到默认站姿 0.0, 0.8, -1.5
-1       进入 RL Locomotion，开始 ONNX 推理并发送 12 关节目标
+0       插值到默认站姿，完成后自动进入 StandHold
+1       从 StandHold 进入 RL Locomotion，开始 ONNX 推理并发送 12 关节目标
 Space   速度命令清零
 9       插值回程序启动时姿态
-Ctrl+C  退出程序；正常先 0 回默认站姿，异常先 P 急停
+P       强制 Passive/卸力，异常立刻按
+Ctrl+C  退出程序；正常先回 StandHold 或按 P，再 Ctrl+C
 ```
 
-## 当前 ONNX 策略能力边界
+注意：`P` 是卸力，不是保持站立。正常流程优先让程序停在 StandHold。
 
-当前 `policy.onnx` 是速度跟踪型 locomotion policy，不是专用静态站立控制器，
-也不是“走到某个距离”的位置任务控制器。
+## 吊装低层控制测试
 
-进入 `RLFSMStateRLLocomotion` 后，模型每 20 ms 根据 IMU 角速度、重力方向、
-速度命令、12 个关节位置/速度和上一帧动作，输出 12 个关节位置目标偏移：
+运行前：
+
+```bash
+cd /home/hyq/unitree_go2/go2_rl
+mkdir -p logs
+pgrep -af 'rl_real_go2|go2_low_level|go2_stand_example' || true
+```
+
+启动：
+
+```bash
+./upstream/rl_sar/cmake_build/bin/rl_real_go2 enp99s0 2>&1 \
+  | tee "logs/real_standhold_lowcmd_$(date +%Y%m%d_%H%M%S).log"
+```
+
+第一阶段只验证默认站姿和 StandHold：
 
 ```text
-q_target = default_dof_pos + action * action_scale
+1. 程序启动后保持 Passive。
+2. 按 0。
+3. 等待 GetUp 插值完成。
+4. 确认日志进入 RLFSMStateStandHold。
+5. 不按 1，观察 5 至 10 秒。
+6. 正常结束：按 P，再 Ctrl+C。
 ```
 
-实际发给电机的是 12 个关节位置目标、`kp/kd` 和零前馈力矩。零速度命令
-`vx=0, vy=0, yaw=0` 不等于严格站立；策略仍可能持续产生小步态/摆腿动作。
-因此当前阶段只能把它看作“低速步态候选策略”，还不能当作长时间地面静态站立
-或稳定行走控制器。
+合格日志：
 
-`logs/real_first_lowcmd_20260815_163518.log` 的分析结论：
+```text
+Keyboard input: Num0 ...
+Switch from RLFSMStatePassive to RLFSMStateGetUp
+Getting up completed
+Switch from RLFSMStateGetUp to RLFSMStateStandHold
+Entered stand-hold mode...
+```
 
-- `P` 和 `0` 阶段正常，站姿插值完成。
-- 按 `1` 后进入 `RLLocomotion`，ONNX 模型加载成功。
-- 日志里速度命令为 `x:0.00 y:-0.00 yaw:-0.00`，不是误给速度。
-- `RL Controller` 出现 3734 次，按 20 ms 策略周期估算约 74.68 秒，并非
-  2 至 3 秒短测。
-- 现场观察到关节抖动、轻微打滑和原地旋转，说明当前策略接管不能直接放行
-  地面 RL。
+合格条件：
 
-根据这次结果，本项目已完成以下实机保护改动；继续测试前请重新编译并确认
-运行的是新的 `rl_real_go2`：
+- 机器人吊装状态下姿态稳定。
+- 关节没有持续发散。
+- CSV 中 StandHold 段 `kp` 为 `real_stand_hold_kp`，默认 20。
+- 没有硬保护、姿态保护或 DDS 连续异常。
 
-- RL 接管过渡：从当前姿态逐步混入策略目标。
-- 关节目标 slew-rate 限幅：限制每个策略周期的目标角度变化。
-- 正常退出回默认站姿：进入 `RLLocomotion` 后按 `0` 回 `GetUp/default stand`；
-  异常急停才按 `P` 进入 Passive。
-- 非时间 soft guard：实际 lowcmd 目标 tracking 误差连续超限、RL 姿态连续超限，
-  或扭矩预警，先回默认站姿，不等硬保护卸力。
-- 全状态硬保护：硬扭矩/60 度姿态保护覆盖 Passive、GetUp 和 RLLocomotion。
-- 异常恢复低增益：soft guard 触发后进入 `GetUp` 使用低恢复增益，不再用
-  `fixed_kp=80` 硬拉。
-- GetUp 姿态保护：`GetUp` 中姿态过大时直接切 Passive，避免继续插值站姿。
-- q/target/tau/IMU 日志：记录当前关节、目标关节、估计扭矩、kp/kd、命令值和
-  IMU roll/pitch/yaw；同时记录 raw policy target，用于区分 ONNX 原始目标和
-  经过接管过渡/slew-rate 限幅后的实际发送目标。
+## 吊装 RL 零速度测试
 
-当前默认保护参数位于 `upstream/rl_sar/policy/go2/robot_lab/config.yaml`：
+只有 StandHold 合格后才进入该阶段。
+
+流程：
+
+```text
+1. 启动 rl_real_go2。
+2. 按 0，进入默认站姿并等待 StandHold。
+3. 按 Space，确认速度命令清零。
+4. 按 1，进入 RL Locomotion。
+5. 只观察零速度 RL，发现异常立刻按 P。
+6. 如果 soft guard 触发，程序应自动回 GetUp，再进入 StandHold。
+7. 正常结束时不要长时间留在 RL；回 StandHold 后再按 P/Ctrl+C。
+```
+
+期望日志：
+
+```text
+Keyboard input: Num1 ...
+Switch from RLFSMStateStandHold to RLFSMStateRLLocomotion
+Successfully loaded ONNX model: ...
+RL Controller [robot_lab] x:0.00 y:0.00 yaw:0.00
+```
+
+soft guard 触发后的期望日志：
+
+```text
+Real RL soft guard: ...
+Switch from RLFSMStateRLLocomotion to RLFSMStateGetUp
+GetUp entered from RL soft guard; using low recovery gains.
+Getting up completed
+Switch from RLFSMStateGetUp to RLFSMStateStandHold
+```
+
+不合格条件：
+
+- 零速度下明显原地旋转、打滑或摆腿发散。
+- `tau_est` 接近或超过软阈值。
+- `q_target - q` 连续接近阈值。
+- roll/pitch 快速增大。
+- soft guard 后直接进入 Passive，且日志中没有人工 `P` 或硬保护原因。
+
+## 当前实机保护参数
+
+参数文件：
+
+```text
+upstream/rl_sar/policy/go2/base.yaml
+upstream/rl_sar/policy/go2/robot_lab/config.yaml
+```
+
+默认值：
 
 ```yaml
 real_rl_transition_seconds: 1.0
@@ -325,56 +360,102 @@ real_getup_attitude_passive_roll_deg: 45.0
 real_getup_attitude_passive_pitch_deg: 30.0
 real_hard_roll_deg: 60.0
 real_hard_pitch_deg: 60.0
+real_stand_hold_kp: 20.0
+real_stand_hold_kd: 0.5
 real_telemetry_log_decimation: 4
 ```
 
-下一次运行 `rl_real_go2` 时会额外生成：
+保护行为：
 
-```text
-logs/real_q_target_tau_YYYYMMDD_HHMMSS.csv
-```
+- RL 接管时先从当前姿态过渡。
+- 策略目标经过 slew-rate 限幅后才发送。
+- tracking guard 检查的是实际 lowcmd 目标与实测 q 的误差。
+- `tau_est` 超过软阈值时先回默认站姿，不等待硬扭矩保护。
+- soft guard 后 `GetUp` 使用低恢复增益。
+- `GetUp` 完成后进入 StandHold，不自动卸力 Passive。
+- `P` 或手柄 `L1+X` 仍然可以强制 Passive。
 
-该 CSV 用于回放每条腿的 `q`、`dq`、`tau_est`、`q_target`、
-`raw_policy_q_target`、`dq_target`、`kp`、`kd`、`tau_cmd` 以及
-`imu_roll/pitch/yaw`。其中 `q_target` 是实际 lowcmd 目标，
-`raw_policy_q_target` 是 ONNX 策略经过 action scale/joint clamp 后、尚未经过
-接管过渡和 slew-rate 限幅的目标。如果再次出现抖动，先分析这个 CSV，再决定
-是否继续降低 `real_rl_target_slew_rate_rad_s`、调整
-`real_rl_tracking_error_guard_rad` / `real_rl_tracking_error_guard_frames`，
-或调整 `real_rl_torque_warning_nm` / IMU guard 阈值。
+## 实机日志查看
 
-## 保护版零速度 RL 成功记录
-
-2026-08-15 17:08 至 17:10 的吊装/零速度保护版测试已整理为：
-
-```text
-logs/success_rl_zero_cmd_2s_lowcmd_20260815_170834.log
-logs/success_rl_zero_cmd_2s_q_target_tau_20260815_170834.csv
-```
-
-重点结论：
-
-- `RLFSMStateRLLocomotion` 段为 100 帧 CSV 记录，按 20 ms/帧为 2.00 秒。
-- RL 段速度命令全程为 `vx=0, vy=0, yaw=0`。
-- 终端日志无 warning/error；该历史成功日志来自旧的 2 秒自动 Passive 版本。
-- 现场观察为稳定关节运动；后续版本已删除自动时间限制，改为非时间 soft
-  guard。正常退出按 `0` 回默认站姿，异常急停才按 `P`。
-
-当前版本不再提供 `1` 后自动退回时间配置入口。进入 `RLFSMStateRLLocomotion`
-后会持续运行，直到：
-
-- 按 `0`：正常切回默认站姿流程。
-- soft guard 触发：实际 lowcmd 目标的 tracking 误差连续 3 个 policy 帧超过
-  `0.8 rad`、RL 姿态 roll/pitch 连续 3 帧超过 `25°/18°`，或扭矩超过
-  `16 Nm` 时，自动请求 `RLFSMStateGetUp` 回默认站姿，并使用低恢复增益。
-- `GetUp` 姿态保护触发：roll 超过 `45°` 或 pitch 超过 `30°` 时直接退回
-  Passive。
-- 按 `P`：异常急停，立即退回 Passive。
-- 按 `9`：回到程序启动姿态流程。
-- 60° 姿态/硬扭矩保护触发：锁存退回 Passive，需重启程序解除。
-
-修改代码后重新编译：
+查看最新终端日志：
 
 ```bash
-./tools/build_go2_deploy.sh
+tail -n 120 "$(ls -t logs/real_*lowcmd_*.log | head -n 1)"
 ```
+
+筛选关键事件：
+
+```bash
+grep -E 'Keyboard input|Joystick keys|Switch from|Real RL soft guard|stand-hold|GetUp entered|GetUp attitude|Torque\(|Roll exceeds|Pitch exceeds|Entered passive|ddsi_udp_conn_write' \
+  "$(ls -t logs/real_*lowcmd_*.log | head -n 1)"
+```
+
+查看最新 CSV：
+
+```bash
+csv="$(ls -t logs/real_q_target_tau_*.csv | head -n 1)"
+head -n 1 "$csv"
+tail -n 5 "$csv"
+```
+
+按状态统计：
+
+```bash
+awk -F, 'NR>1{count[$2]++} END{for (s in count) print s,count[s]}' "$csv"
+```
+
+快速找最大扭矩、最大实际目标误差：
+
+```bash
+python3 - <<'PY'
+import csv, math
+from pathlib import Path
+
+p = Path(sorted(Path("logs").glob("real_q_target_tau_*.csv"))[-1])
+joints = [
+    "FR_hip","FR_thigh","FR_calf","FL_hip","FL_thigh","FL_calf",
+    "RR_hip","RR_thigh","RR_calf","RL_hip","RL_thigh","RL_calf",
+]
+
+def f(x):
+    return None if x == "" else float(x)
+
+best_tau = (0, None, None)
+best_err = (0, None, None)
+states = {}
+
+with p.open(newline="") as fh:
+    for row in csv.DictReader(fh):
+        states[row["state"]] = states.get(row["state"], 0) + 1
+        for j in joints:
+            tau = f(row[f"tau_est_{j}"])
+            if tau is not None and abs(tau) > best_tau[0]:
+                best_tau = (abs(tau), j, row)
+            q = f(row[f"q_{j}"])
+            qt = f(row[f"q_target_{j}"])
+            if q is not None and qt is not None and abs(qt - q) > best_err[0]:
+                best_err = (abs(qt - q), j, row)
+
+print("csv:", p)
+print("states:", states)
+for name, best in [("max_tau", best_tau), ("max_q_target_error", best_err)]:
+    value, joint, row = best
+    print(name, value, joint, "motiontime", row["motiontime"], "state", row["state"],
+          "roll", row["imu_roll_deg"], "pitch", row["imu_pitch_deg"])
+PY
+```
+
+## 放行标准
+
+进入下一阶段前必须同时满足：
+
+- 当前阶段日志可解释，无未知状态切换。
+- 键盘/手柄事件与现场操作一致。
+- `lowstate` 无明显掉帧、CRC 错误或长时间陈旧。
+- `tau_est` 未持续逼近软阈值。
+- `q_target - q` 未持续逼近阈值。
+- roll/pitch 未快速发散。
+- soft guard 能回到 `GetUp -> StandHold`。
+- 现场人员确认急停和物理断电路径有效。
+
+任何一项不满足，停止继续测试，先分析日志。

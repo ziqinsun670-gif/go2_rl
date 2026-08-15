@@ -192,7 +192,9 @@ struct Control {
   }
 
   void ClearInput() {
-    current_keyboard = last_keyboard;
+    last_keyboard = current_keyboard;
+    current_keyboard = Input::Keyboard::None;
+    last_gamepad = current_gamepad;
     current_gamepad = Input::Gamepad::None;
   }
 };

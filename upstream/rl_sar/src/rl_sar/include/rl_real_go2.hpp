@@ -129,6 +129,7 @@ private:
   std::vector<float> real_raw_policy_target;
   int real_telemetry_counter = 0;
   int real_rl_imu_soft_guard_violation_count = 0;
+  uint16_t real_last_logged_joystick_keys = 0;
   bool real_telemetry_enabled = false;
   bool real_rl_safe_stand_requested = false;
 

@@ -12,6 +12,62 @@
 #include <iomanip>
 #include <sstream>
 
+namespace {
+
+std::string DescribeUnitreeJoyKeys(uint16_t keys) {
+  xKeySwitchUnion joy{};
+  joy.value = keys;
+  std::vector<std::string> names;
+
+  if (joy.components.R1)
+    names.emplace_back("R1");
+  if (joy.components.L1)
+    names.emplace_back("L1");
+  if (joy.components.start)
+    names.emplace_back("start");
+  if (joy.components.select)
+    names.emplace_back("select");
+  if (joy.components.R2)
+    names.emplace_back("R2");
+  if (joy.components.L2)
+    names.emplace_back("L2");
+  if (joy.components.F1)
+    names.emplace_back("F1");
+  if (joy.components.F2)
+    names.emplace_back("F2");
+  if (joy.components.A)
+    names.emplace_back("A");
+  if (joy.components.B)
+    names.emplace_back("B");
+  if (joy.components.X)
+    names.emplace_back("X");
+  if (joy.components.Y)
+    names.emplace_back("Y");
+  if (joy.components.up)
+    names.emplace_back("up");
+  if (joy.components.right)
+    names.emplace_back("right");
+  if (joy.components.down)
+    names.emplace_back("down");
+  if (joy.components.left)
+    names.emplace_back("left");
+
+  if (names.empty()) {
+    return "none";
+  }
+
+  std::ostringstream oss;
+  for (size_t i = 0; i < names.size(); ++i) {
+    if (i > 0) {
+      oss << '+';
+    }
+    oss << names[i];
+  }
+  return oss.str();
+}
+
+} // namespace
+
 RL_Real::RL_Real(int argc, char **argv) {
   bool wheel_mode = (argc > 2 && std::string(argv[2]) == "wheel");
 
@@ -598,7 +654,21 @@ void RL_Real::LowStateMessageHandler(const void *message) {
 
 void RL_Real::JoystickHandler(const void *message) {
   joystick = *(unitree_go::msg::dds_::WirelessController_ *)message;
-  this->unitree_joy.value = joystick.keys();
+  const uint16_t keys = static_cast<uint16_t>(joystick.keys());
+  if (keys != this->real_last_logged_joystick_keys) {
+    const std::string state_name =
+        this->fsm.current_state_ ? this->fsm.current_state_->GetStateName()
+                                 : "UNKNOWN";
+    std::ostringstream key_hex;
+    key_hex << "0x" << std::hex << std::setw(4) << std::setfill('0') << keys;
+    std::cout << std::endl
+              << LOGGER::INFO << "Joystick keys: "
+              << DescribeUnitreeJoyKeys(keys) << " raw=" << key_hex.str()
+              << " motiontime=" << this->motiontime
+              << " state=" << state_name << std::endl;
+    this->real_last_logged_joystick_keys = keys;
+  }
+  this->unitree_joy.value = keys;
 }
 
 void RL_Real::InitRealTelemetryLog() {
