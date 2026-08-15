@@ -1,0 +1,24 @@
+# Local Python/Conda environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Build outputs
+build/
+cmake-build-*/
+cpp/build/
+upstream/rl_sar/cmake_build/
+upstream/robot_lab/source/robot_lab/data/Robots/
+
+# Runtime/test logs
+logs/
+*.log
+
+# Local editor/system files
+.DS_Store
+.vscode/
+.idea/
+
+# Temporary packaging directories
+.upload_staging/
